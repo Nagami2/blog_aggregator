@@ -3,6 +3,8 @@ import { setUser, readConfig } from './config';
 import { createUser, getUserByName, deleteAllUsers, getAllUsers } from './db/queries/users';
 import postgres from 'postgres'; // We need this to check for specific DB errors
 import { fetchFeed } from './rss';
+import { createFeed } from './db/queries/feeds';
+import { User, Feed } from './schema';
 
 // --- 1. Command System Types ---
 
@@ -190,6 +192,56 @@ async function handlerAgg(cmdName: string, ...args: string[]) {
   }
 }
 
+/**
+ * Helper function to print feed details
+ */
+function printFeed(feed: Feed, user: User) {
+  console.log('New feed created:');
+  console.log(`- ID: ${feed.id}`);
+  console.log(`- Name: ${feed.name}`);
+  console.log(`- URL: ${feed.url}`);
+  console.log(`- Added by: ${user.name}`);
+}
+
+/**
+ * handlerAddFeed is the new command
+ */
+async function handlerAddFeed(cmdName: string, ...args: string[]) {
+  // 1. Validate arguments
+  if (args.length !== 2) {
+    throw new Error('Usage: addfeed <name> <url>');
+  }
+  const name = args[0];
+  const url = args[1];
+
+  // 2. Get current user from config
+  const config = readConfig();
+  if (!config.currentUserName) {
+    throw new Error('You must be logged in to add a feed.');
+  }
+
+  // 3. Get user from database
+  const user = await getUserByName(config.currentUserName);
+  if (!user) {
+    throw new Error(
+      `User "${config.currentUserName}" not found in database.`
+    );
+  }
+
+  // 4. Try to create the feed
+  console.log(`Creating new feed "${name}" from ${url}...`);
+  try {
+    const newFeed = await createFeed(name, url, user.id);
+    printFeed(newFeed, user);
+  } catch (err) {
+    // Handle "unique_violation" for the URL
+    if (err instanceof postgres.PostgresError && err.code === '23505') {
+      throw new Error(`A feed with this URL (${url}) already exists.`);
+    }
+    throw err; // Re-throw other errors
+  }
+}
+
 // --- 5. Main Application Entry Point ---
 
 /**
@@ -204,6 +256,7 @@ async function main() { // <-- CHANGED
   registerCommand(registry, 'reset', handlerReset);
   registerCommand(registry, 'users', handlerListUsers);
   registerCommand(registry, 'agg', handlerAgg);
+  registerCommand(registry, 'addfeed', handlerAddFeed);
 
   const args = process.argv.slice(2);
 
