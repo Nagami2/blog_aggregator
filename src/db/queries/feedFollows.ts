@@ -47,3 +47,18 @@ export async function getFeedFollowsForUser(userId: string) {
 
   return follows;
 }
+
+// add the function deleteFeedFollow
+export async function deleteFeedFollow(userId: string, feedId: string) {
+  const [deleted] = await db
+    .delete(feedFollows)
+    .where(
+      and(
+        eq(feedFollows.userId, userId),
+        eq(feedFollows.feedId, feedId)
+      )
+    )
+    .returning(); // returning the deleted row, or undefined if none
+
+  return deleted;
+}

@@ -4,7 +4,7 @@ import { createUser, getUserByName, deleteAllUsers, getAllUsers } from './db/que
 import postgres from 'postgres'; // We need this to check for specific DB errors
 import { fetchFeed } from './rss';
 import { createFeed, getAllFeeds, getFeedByUrl } from './db/queries/feeds';
-import { createFeedFollow, getFeedFollowsForUser } from './db/queries/feedFollows';
+import { createFeedFollow, getFeedFollowsForUser, deleteFeedFollow } from './db/queries/feedFollows';
 import { User, Feed } from './schema';
 import { create } from 'domain';
 import { register } from 'module';
@@ -377,6 +377,43 @@ async function handlerFollowing(
   }
 }
 
+/**
+ * handlerUnfollow is the new command
+ */
+async function handlerUnfollow(
+  cmdName: string,
+  user: User, // <-- Receives user from middleware
+  ...args: string[]
+) {
+  // 1. Validate arguments
+  if (args.length !== 1) {
+    throw new Error('Usage: unfollow <url>');
+  }
+  const url = args[0];
+
+  // 2. Get the feed from the URL
+  const feed = await getFeedByUrl(url);
+  if (!feed) {
+    throw new Error(`No feed found with URL: ${url}`);
+  }
+
+  // 3. Try to delete the follow
+  try {
+    const deleted = await deleteFeedFollow(user.id, feed.id);
+
+    // 4. Check if we actually deleted anything
+    if (!deleted) {
+      throw new Error(`You are not following "${feed.name}"`);
+    }
+
+    console.log(`Unfollowed "${feed.name}"`);
+
+  } catch (err) {
+    // Handle other errors (like DB connection)
+    throw err;
+  }
+}
+
 // --- 5. Main Application Entry Point ---
 
 /**
@@ -397,6 +434,8 @@ async function main() { // <-- CHANGED
   registerCommand(registry, 'addfeed', middlewareLoggedIn(handlerAddFeed));
   registerCommand(registry, 'follow', middlewareLoggedIn(handlerFollow));
   registerCommand(registry, 'following', middlewareLoggedIn(handlerFollowing));
+  registerCommand(registry, 'unfollow', middlewareLoggedIn(handlerUnfollow));
+
 
   const args = process.argv.slice(2);
 
