@@ -3,11 +3,68 @@ import { setUser, readConfig } from './config';
 import { createUser, getUserByName, deleteAllUsers, getAllUsers } from './db/queries/users';
 import postgres from 'postgres'; // We need this to check for specific DB errors
 import { fetchFeed } from './rss';
-import { createFeed, getAllFeeds, getFeedByUrl } from './db/queries/feeds';
+import { createFeed, getAllFeeds, getFeedByUrl, getNextFeedToFetch, markFeedFetched } from './db/queries/feeds';
 import { createFeedFollow, getFeedFollowsForUser, deleteFeedFollow } from './db/queries/feedFollows';
 import { User, Feed } from './schema';
 import { create } from 'domain';
 import { register } from 'module';
+
+// --- NEW HELPER FUNCTION ---
+function parseDuration(durationStr: string): number | null {
+  const regex = /^(\d+)(ms|s|m|h)$/;
+  const match = durationStr.match(regex);
+  if (!match) {
+    return null; // Invalid format
+  }
+
+  const value = parseInt(match[1]);
+  const unit = match[2];
+
+  switch (unit) {
+    case 'ms':
+      return value;
+    case 's':
+      return value * 1000;
+    case 'm':
+      return value * 1000 * 60;
+    case 'h':
+      return value * 1000 * 60 * 60;
+    default:
+      return null;
+  }
+}
+
+/**
+ * This is the main worker function.
+ */
+async function scrapeFeeds() {
+  // 1. Get the next feed
+  const feed = await getNextFeedToFetch();
+  if (!feed) {
+    console.log('No feeds to fetch.');
+    return; // All done for now
+  }
+  
+  console.log(`- Fetching ${feed.name} (${feed.url})...`);
+
+  try {
+    // 2. Mark it as fetched *before* you fetch it.
+    // This prevents a race condition if you run multiple workers.
+    await markFeedFetched(feed.id);
+
+    // 3. Fetch the feed
+    const rssFeed = await fetchFeed(feed.url);
+
+    // 4. (For now) Just print the post titles
+    console.log(`  Found ${rssFeed.channel.item.length} posts:`);
+    for (const item of rssFeed.channel.item) {
+      console.log(`    * ${item.title}`);
+    }
+  } catch (err) {
+    // If a fetch fails, log it but don't stop the loop
+    console.error(`  Failed to fetch ${feed.name}:`, (err as Error).message);
+  }
+}
 
 // --- 1. Command System Types ---
 
@@ -204,43 +261,54 @@ async function handlerListUsers(cmdName: string, ...args: string[]) {
 }
 
 /**
- * handlerAgg is the new command
+ * handlerAgg is now the long-running worker
  */
 async function handlerAgg(cmdName: string, ...args: string[]) {
-  // 1. Validate arguments (should be none)
-  if (args.length > 0) {
-    throw new Error('Usage: agg (takes no arguments)');
+  // 1. Validate arguments
+  if (args.length !== 1) {
+    throw new Error('Usage: agg <duration>');
+  }
+  
+  const durationStr = args[0];
+  const timeBetweenRequests = parseDuration(durationStr);
+  
+  if (!timeBetweenRequests) {
+    throw new Error('Invalid duration. Use format: 1s, 10m, 1h, etc.');
   }
 
-  // 2. Get the test feed URL from the assignment
-  const feedURL = 'https://www.wagslane.dev/index.xml';
+  // 2. Format the duration for printing
+  // (This is just a nice-to-have from the lesson)
+  const [val, unit] = durationStr.match(/^(\d+)(.+)$/)!.slice(1);
+  console.log(`Collecting feeds every ${val}${unit}...`);
 
-  console.log(`Fetching feed from ${feedURL}...`);
+  // 3. Define a simple error handler
+  const handleError = (err: unknown) => {
+    if (err instanceof Error) {
+      console.error(`Scrape loop error: ${err.message}`);
+    } else {
+      console.error('An unknown error occurred in the scrape loop.');
+    }
+  };
 
-  try {
-    // 3. Call your new fetch function
-    const feed = await fetchFeed(feedURL);
+  // 4. Run the loop
+  
+  // Run it once immediately
+  scrapeFeeds().catch(handleError);
+  
+  // Run it on an interval
+  const interval = setInterval(() => {
+    scrapeFeeds().catch(handleError);
+  }, timeBetweenRequests);
 
-    // 4. Print the entire object
-    console.log('Feed fetched successfully:');
-    console.log(JSON.stringify(feed, null, 2)); // Pretty-print the JSON
-
-  } catch (err) {
-    console.error('Failed to fetch feed.');
-    throw err; // Re-throw to be caught by main
-  }
+  // 5. Handle graceful shutdown (Ctrl+C)
+  await new Promise<void>((resolve) => {
+    process.on('SIGINT', () => {
+      console.log('\nShutting down feed aggregator...');
+      clearInterval(interval);
+      resolve();
+    });
+  });
 }
-
-// /**
-//  * Helper function to print feed details
-//  */
-// function printFeed(feed: Feed, user: User) {
-//   console.log('New feed created:');
-//   console.log(`- ID: ${feed.id}`);
-//   console.log(`- Name: ${feed.name}`);
-//   console.log(`- URL: ${feed.url}`);
-//   console.log(`- Added by: ${user.name}`);
-// }
 
 /**
  * handlerAddFeed is the new command

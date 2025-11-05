@@ -12,7 +12,7 @@ export const users = pgTable("users", {
   name: text("name").notNull().unique(),
 });
 
-// feeds table
+// feeds table; add lastFetchedAt column
 export const feeds = pgTable("feeds", {
     id: uuid("id").primaryKey().defaultRandom().notNull(),
     createdAt: timestamp("created_at").notNull().defaultNow(),
@@ -25,6 +25,7 @@ export const feeds = pgTable("feeds", {
     userId: uuid("user_id")
         .notNull()
         .references(() => users.id, { onDelete: "cascade" }), // Foreign key to users table
+    lastFetchedAt: timestamp("last_fetched_at"), // it's nullable by default
 });
 
 //feed follows table
