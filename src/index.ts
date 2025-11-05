@@ -3,7 +3,7 @@ import { setUser, readConfig } from './config';
 import { createUser, getUserByName, deleteAllUsers, getAllUsers } from './db/queries/users';
 import postgres from 'postgres'; // We need this to check for specific DB errors
 import { fetchFeed } from './rss';
-import { createFeed } from './db/queries/feeds';
+import { createFeed, getAllFeeds } from './db/queries/feeds';
 import { User, Feed } from './schema';
 
 // --- 1. Command System Types ---
@@ -242,6 +242,39 @@ async function handlerAddFeed(cmdName: string, ...args: string[]) {
   }
 }
 
+/**
+ * handlerListFeeds is the new command
+ */
+async function handlerListFeeds(cmdName: string, ...args: string[]) {
+  // 1. Validate arguments (should be none)
+  if (args.length > 0) {
+    throw new Error('Usage: feeds (takes no arguments)');
+  }
+
+  try {
+    // 2. Call the new query
+    const allFeeds = await getAllFeeds();
+
+    if (allFeeds.length === 0) {
+      console.log('No feeds found.');
+      return;
+    }
+
+    // 3. Loop and print
+    console.log('Feeds:');
+    for (const feed of allFeeds) {
+      console.log(`- Name: ${feed.name}`);
+      console.log(`- URL: ${feed.url}`);
+      console.log(`- Added by: ${feed.addedBy}`); // 'addedBy' is the username
+      console.log('---');
+    }
+
+  } catch (err) {
+    console.error('Failed to list feeds.');
+    throw err; // Re-throw to be caught by main
+  }
+}
+
 // --- 5. Main Application Entry Point ---
 
 /**
@@ -257,6 +290,7 @@ async function main() { // <-- CHANGED
   registerCommand(registry, 'users', handlerListUsers);
   registerCommand(registry, 'agg', handlerAgg);
   registerCommand(registry, 'addfeed', handlerAddFeed);
+  registerCommand(registry, 'feeds', handlerListFeeds);
 
   const args = process.argv.slice(2);
 
