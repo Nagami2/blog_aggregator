@@ -3,8 +3,10 @@ import { setUser, readConfig } from './config';
 import { createUser, getUserByName, deleteAllUsers, getAllUsers } from './db/queries/users';
 import postgres from 'postgres'; // We need this to check for specific DB errors
 import { fetchFeed } from './rss';
-import { createFeed, getAllFeeds } from './db/queries/feeds';
+import { createFeed, getAllFeeds, getFeedByUrl } from './db/queries/feeds';
+import { createFeedFollow, getFeedFollowsForUser } from './db/queries/feedFollows';
 import { User, Feed } from './schema';
+import { create } from 'domain';
 
 // --- 1. Command System Types ---
 
@@ -192,16 +194,16 @@ async function handlerAgg(cmdName: string, ...args: string[]) {
   }
 }
 
-/**
- * Helper function to print feed details
- */
-function printFeed(feed: Feed, user: User) {
-  console.log('New feed created:');
-  console.log(`- ID: ${feed.id}`);
-  console.log(`- Name: ${feed.name}`);
-  console.log(`- URL: ${feed.url}`);
-  console.log(`- Added by: ${user.name}`);
-}
+// /**
+//  * Helper function to print feed details
+//  */
+// function printFeed(feed: Feed, user: User) {
+//   console.log('New feed created:');
+//   console.log(`- ID: ${feed.id}`);
+//   console.log(`- Name: ${feed.name}`);
+//   console.log(`- URL: ${feed.url}`);
+//   console.log(`- Added by: ${user.name}`);
+// }
 
 /**
  * handlerAddFeed is the new command
@@ -232,7 +234,13 @@ async function handlerAddFeed(cmdName: string, ...args: string[]) {
   console.log(`Creating new feed "${name}" from ${url}...`);
   try {
     const newFeed = await createFeed(name, url, user.id);
-    printFeed(newFeed, user);
+    // printFeed(newFeed, user);
+    // automatically follow the feed after creation
+    const followResult = await createFeedFollow(user.id, newFeed.id);
+    console.log(`New feed created and followed:`);
+    console.log(`- Feed: "${followResult.feedName}"`);
+    console.log(`- User: "${followResult.userName}"`);
+
   } catch (err) {
     // Handle "unique_violation" for the URL
     if (err instanceof postgres.PostgresError && err.code === '23505') {
@@ -275,6 +283,78 @@ async function handlerListFeeds(cmdName: string, ...args: string[]) {
   }
 }
 
+/**
+ * handlerFollow is the new command (Task 3)
+ */
+async function handlerFollow(cmdName: string, ...args: string[]) {
+  // 1. Validate arguments
+  if (args.length !== 1) {
+    throw new Error('Usage: follow <url>');
+  }
+  const url = args[0];
+
+  // 2. Get current user
+  const config = readConfig();
+  if (!config.currentUserName) {
+    throw new Error('You must be logged in to follow a feed.');
+  }
+  const user = await getUserByName(config.currentUserName);
+  if (!user) {
+    throw new Error(`User "${config.currentUserName}" not found.`);
+  }
+
+  // 3. Get the feed
+  const feed = await getFeedByUrl(url);
+  if (!feed) {
+    throw new Error(`No feed found with URL: ${url}`);
+  }
+
+  // 4. Create the follow
+  try {
+    const result = await createFeedFollow(user.id, feed.id);
+    console.log(`Following "${result.feedName}" as "${result.userName}"`);
+  } catch (err) {
+    // Handle "unique_violation"
+    if (err instanceof postgres.PostgresError && err.code === '23505') {
+      throw new Error(`You are already following "${feed.name}"`);
+    }
+    throw err;
+  }
+}
+
+/**
+ * handlerFollowing is the new command (Task 5)
+ */
+async function handlerFollowing(cmdName: string, ...args: string[]) {
+  // 1. Validate arguments
+  if (args.length > 0) {
+    throw new Error('Usage: following (takes no arguments)');
+  }
+
+  // 2. Get current user
+  const config = readConfig();
+  if (!config.currentUserName) {
+    throw new Error('You must be logged in.');
+  }
+  const user = await getUserByName(config.currentUserName);
+  if (!user) {
+    throw new Error(`User "${config.currentUserName}" not found.`);
+  }
+
+  // 3. Get follows
+  const follows = await getFeedFollowsForUser(user.id);
+  if (follows.length === 0) {
+    console.log('You are not following any feeds yet.');
+    return;
+  }
+
+  // 4. Print
+  console.log('You are following:');
+  for (const follow of follows) {
+    console.log(`- ${follow.feedName} (${follow.feedUrl})`);
+  }
+}
+
 // --- 5. Main Application Entry Point ---
 
 /**
@@ -291,6 +371,8 @@ async function main() { // <-- CHANGED
   registerCommand(registry, 'agg', handlerAgg);
   registerCommand(registry, 'addfeed', handlerAddFeed);
   registerCommand(registry, 'feeds', handlerListFeeds);
+  registerCommand(registry, 'follow', handlerFollow);
+  registerCommand(registry, 'following', handlerFollowing);
 
   const args = process.argv.slice(2);
 

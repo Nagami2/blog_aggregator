@@ -34,3 +34,13 @@ export async function getAllFeeds() {
 
   return allFeeds;
 }
+
+// get feed by url
+export async function getFeedByUrl(url: string) {
+  const [feed] = await db
+    .select()
+    .from(feeds)
+    .where(eq(feeds.url, url));
+
+  return feed;
+}

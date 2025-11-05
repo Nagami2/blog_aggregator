@@ -15,6 +15,13 @@
       "when": 1762368362250,
       "tag": "0001_omniscient_princess_powerful",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1762372879627,
+      "tag": "0002_thankful_human_cannonball",
+      "breakpoints": true
     }
   ]
 }
