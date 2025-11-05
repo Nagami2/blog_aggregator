@@ -7,6 +7,7 @@ import { createFeed, getAllFeeds, getFeedByUrl } from './db/queries/feeds';
 import { createFeedFollow, getFeedFollowsForUser } from './db/queries/feedFollows';
 import { User, Feed } from './schema';
 import { create } from 'domain';
+import { register } from 'module';
 
 // --- 1. Command System Types ---
 
@@ -16,6 +17,13 @@ import { create } from 'domain';
 type CommandHandler = (cmdName: string, ...args: string[]) => Promise<void>; // <-- CHANGED
 
 type CommandsRegistry = Record<string, CommandHandler>;
+
+// a handler that receives a 'User' object
+type UserCommandHandler = (
+    cmdName: string,
+    user: User,
+    ...args: string[]
+) => Promise<void>;
 
 // --- 3. Command System Functions ---
 
@@ -42,6 +50,35 @@ async function runCommand( // <-- CHANGED
   
   // We await the handler, since it's now async
   await handler(cmdName, ...args); // <-- CHANGED
+}
+
+/**
+ * This is our middleware function (the "bouncer").
+ * It takes a 'UserCommandHandler' (the "VIP room")
+ * and returns a regular 'CommandHandler' (the "bouncer's public-facing_logic").
+ */
+function middlewareLoggedIn(handler: UserCommandHandler): CommandHandler {
+  // This is the function that will be registered and run
+  return async (cmdName: string, ...args: string[]) => {
+    
+    // 1. Check for login in config
+    const config = readConfig();
+    if (!config.currentUserName) {
+      throw new Error('You must be logged in. Use "register" or "login".');
+    }
+    
+    // 2. Get user from DB
+    const user = await getUserByName(config.currentUserName);
+    if (!user) {
+      throw new Error(
+        `User "${config.currentUserName}" not found. Please register.`
+      );
+    }
+
+    // 3. If all checks pass, call the *real* handler
+    //    with the user object.
+    await handler(cmdName, user, ...args);
+  };
 }
 
 // --- 2. Command Handlers ---
@@ -208,7 +245,12 @@ async function handlerAgg(cmdName: string, ...args: string[]) {
 /**
  * handlerAddFeed is the new command
  */
-async function handlerAddFeed(cmdName: string, ...args: string[]) {
+// Replace your old handlerAddFeed with this:
+async function handlerAddFeed(
+  cmdName: string,
+  user: User, // <-- Receives user from middleware
+  ...args: string[]
+) {
   // 1. Validate arguments
   if (args.length !== 2) {
     throw new Error('Usage: addfeed <name> <url>');
@@ -216,37 +258,24 @@ async function handlerAddFeed(cmdName: string, ...args: string[]) {
   const name = args[0];
   const url = args[1];
 
-  // 2. Get current user from config
-  const config = readConfig();
-  if (!config.currentUserName) {
-    throw new Error('You must be logged in to add a feed.');
-  }
+  // 2. We can DELETE all the 'readConfig' and 'getUserByName'
+  //    code. The 'user' object is just given to us!
 
-  // 3. Get user from database
-  const user = await getUserByName(config.currentUserName);
-  if (!user) {
-    throw new Error(
-      `User "${config.currentUserName}" not found in database.`
-    );
-  }
-
-  // 4. Try to create the feed
+  // 3. Try to create the feed
   console.log(`Creating new feed "${name}" from ${url}...`);
   try {
-    const newFeed = await createFeed(name, url, user.id);
-    // printFeed(newFeed, user);
-    // automatically follow the feed after creation
-    const followResult = await createFeedFollow(user.id, newFeed.id);
+    const newFeed = await createFeed(name, url, user.id); // <-- Use user.id
+    
+    const followResult = await createFeedFollow(user.id, newFeed.id); // <-- Use user.id
     console.log(`New feed created and followed:`);
     console.log(`- Feed: "${followResult.feedName}"`);
     console.log(`- User: "${followResult.userName}"`);
 
   } catch (err) {
-    // Handle "unique_violation" for the URL
     if (err instanceof postgres.PostgresError && err.code === '23505') {
       throw new Error(`A feed with this URL (${url}) already exists.`);
     }
-    throw err; // Re-throw other errors
+    throw err;
   }
 }
 
@@ -286,22 +315,19 @@ async function handlerListFeeds(cmdName: string, ...args: string[]) {
 /**
  * handlerFollow is the new command (Task 3)
  */
-async function handlerFollow(cmdName: string, ...args: string[]) {
+// Replace your old handlerFollow with this:
+async function handlerFollow(
+  cmdName: string,
+  user: User, // <-- Receives user from middleware
+  ...args: string[]
+) {
   // 1. Validate arguments
   if (args.length !== 1) {
     throw new Error('Usage: follow <url>');
   }
   const url = args[0];
 
-  // 2. Get current user
-  const config = readConfig();
-  if (!config.currentUserName) {
-    throw new Error('You must be logged in to follow a feed.');
-  }
-  const user = await getUserByName(config.currentUserName);
-  if (!user) {
-    throw new Error(`User "${config.currentUserName}" not found.`);
-  }
+  // 2. DELETE all the user lookup code
 
   // 3. Get the feed
   const feed = await getFeedByUrl(url);
@@ -311,10 +337,9 @@ async function handlerFollow(cmdName: string, ...args: string[]) {
 
   // 4. Create the follow
   try {
-    const result = await createFeedFollow(user.id, feed.id);
+    const result = await createFeedFollow(user.id, feed.id); // <-- Use user.id
     console.log(`Following "${result.feedName}" as "${result.userName}"`);
   } catch (err) {
-    // Handle "unique_violation"
     if (err instanceof postgres.PostgresError && err.code === '23505') {
       throw new Error(`You are already following "${feed.name}"`);
     }
@@ -325,24 +350,21 @@ async function handlerFollow(cmdName: string, ...args: string[]) {
 /**
  * handlerFollowing is the new command (Task 5)
  */
-async function handlerFollowing(cmdName: string, ...args: string[]) {
+// Replace your old handlerFollowing with this:
+async function handlerFollowing(
+  cmdName: string,
+  user: User, // <-- Receives user from middleware
+  ...args: string[]
+) {
   // 1. Validate arguments
   if (args.length > 0) {
     throw new Error('Usage: following (takes no arguments)');
   }
 
-  // 2. Get current user
-  const config = readConfig();
-  if (!config.currentUserName) {
-    throw new Error('You must be logged in.');
-  }
-  const user = await getUserByName(config.currentUserName);
-  if (!user) {
-    throw new Error(`User "${config.currentUserName}" not found.`);
-  }
+  // 2. DELETE all the user lookup code
 
   // 3. Get follows
-  const follows = await getFeedFollowsForUser(user.id);
+  const follows = await getFeedFollowsForUser(user.id); // <-- Use user.id
   if (follows.length === 0) {
     console.log('You are not following any feeds yet.');
     return;
@@ -369,10 +391,12 @@ async function main() { // <-- CHANGED
   registerCommand(registry, 'reset', handlerReset);
   registerCommand(registry, 'users', handlerListUsers);
   registerCommand(registry, 'agg', handlerAgg);
-  registerCommand(registry, 'addfeed', handlerAddFeed);
   registerCommand(registry, 'feeds', handlerListFeeds);
-  registerCommand(registry, 'follow', handlerFollow);
-  registerCommand(registry, 'following', handlerFollowing);
+
+  // Commands that require login use the middleware
+  registerCommand(registry, 'addfeed', middlewareLoggedIn(handlerAddFeed));
+  registerCommand(registry, 'follow', middlewareLoggedIn(handlerFollow));
+  registerCommand(registry, 'following', middlewareLoggedIn(handlerFollowing));
 
   const args = process.argv.slice(2);
 
