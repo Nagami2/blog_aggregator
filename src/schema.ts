@@ -55,7 +55,26 @@ export const feedFollows = pgTable(
     }
 );
 
+// add the posts table
+export const posts = pgTable("posts", {
+  id: uuid("id").primaryKey().defaultRandom().notNull(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at")
+    .notNull()
+    .defaultNow()
+    .$onUpdate(() => new Date()), 
+  title: text("title").notNull(),
+  url: text("url").notNull().unique(),
+  description: text("description"),
+  // the rss feed gives a string, but we'll parse it to a Data
+  // and store it as a timestamp
+  publishedAt: timestamp("published_at").notNull(),
+  feedId: uuid("feed_id")
+    .notNull()
+    .references(() => feeds.id, { onDelete: "cascade" }), // Foreign key to feeds table 
+});
+
 // Drizzle type helpers for TypeScript inference
 export type User = typeof users.$inferSelect;
 export type Feed = typeof feeds.$inferSelect;
-export type FeedFollow = typeof feedFollows.$inferSelect;
+export type Post = typeof posts.$inferSelect;

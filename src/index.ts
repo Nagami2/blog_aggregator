@@ -5,6 +5,7 @@ import postgres from 'postgres'; // We need this to check for specific DB errors
 import { fetchFeed } from './rss';
 import { createFeed, getAllFeeds, getFeedByUrl, getNextFeedToFetch, markFeedFetched } from './db/queries/feeds';
 import { createFeedFollow, getFeedFollowsForUser, deleteFeedFollow } from './db/queries/feedFollows';
+import { createPost, getPostsForUser } from './db/queries/posts';
 import { User, Feed } from './schema';
 import { create } from 'domain';
 import { register } from 'module';
@@ -35,33 +36,64 @@ function parseDuration(durationStr: string): number | null {
 }
 
 /**
- * This is the main worker function.
+ * This is the replaced main worker function, with try catch around post creation.
  */
 async function scrapeFeeds() {
   // 1. Get the next feed
   const feed = await getNextFeedToFetch();
   if (!feed) {
     console.log('No feeds to fetch.');
-    return; // All done for now
+    return;
   }
-  
+
   console.log(`- Fetching ${feed.name} (${feed.url})...`);
 
   try {
-    // 2. Mark it as fetched *before* you fetch it.
-    // This prevents a race condition if you run multiple workers.
+    // 2. Mark it as fetched
     await markFeedFetched(feed.id);
 
     // 3. Fetch the feed
     const rssFeed = await fetchFeed(feed.url);
 
-    // 4. (For now) Just print the post titles
-    console.log(`  Found ${rssFeed.channel.item.length} posts:`);
+    // 4. --- THIS IS THE NEW PART ---
+    console.log(`  Found ${rssFeed.channel.item.length} posts. Saving...`);
+    let newPostsSaved = 0;
+
     for (const item of rssFeed.channel.item) {
-      console.log(`    * ${item.title}`);
+      // This inner try/catch is CRUCIAL
+      try {
+        // 5. Parse the date
+        const pubDate = new Date(item.pubDate);
+        if (isNaN(pubDate.getTime())) {
+          throw new Error('Invalid date format');
+        }
+
+        // 6. Try to save the post
+        await createPost({
+          title: item.title,
+          url: item.link,
+          description: item.description,
+          publishedAt: pubDate,
+          feedId: feed.id,
+        });
+        newPostsSaved++;
+      } catch (err) {
+        // 7. Check for unique constraint violation
+        if (err instanceof postgres.PostgresError && err.code === '23505') {
+          // This is expected! It just means the post is already saved.
+          // We can safely ignore it and continue.
+          continue;
+        }
+        // Log other, unexpected errors
+        console.error(
+          `  Failed to save post "${item.title}":`,
+          (err as Error).message
+        );
+      }
     }
+    console.log(`  Saved ${newPostsSaved} new posts.`);
+
   } catch (err) {
-    // If a fetch fails, log it but don't stop the loop
     console.error(`  Failed to fetch ${feed.name}:`, (err as Error).message);
   }
 }
@@ -482,6 +514,52 @@ async function handlerUnfollow(
   }
 }
 
+/**
+ * handlerBrowse is the new command
+ */
+async function handlerBrowse(
+  cmdName: string,
+  user: User, // <-- Receives user from middleware
+  ...args: string[]
+) {
+  // 1. Validate and parse arguments
+  let limit = 2; // Default
+  if (args.length > 1) {
+    throw new Error('Usage: browse [limit]');
+  }
+  if (args.length === 1) {
+    const parsedLimit = parseInt(args[0]);
+    if (isNaN(parsedLimit) || parsedLimit <= 0) {
+      throw new Error('Limit must be a positive number.');
+    }
+    limit = parsedLimit;
+  }
+
+  // 2. Get the posts
+  try {
+    const posts = await getPostsForUser(user.id, limit);
+    if (posts.length === 0) {
+      console.log(
+        "No posts found. Try following some feeds with 'follow <url>'."
+      );
+      return;
+    }
+
+    // 3. Print the posts
+    console.log(`Showing the ${posts.length} latest posts:`);
+    console.log('---');
+    for (const post of posts) {
+      console.log(`Title: ${post.title}`);
+      console.log(`URL: ${post.url}`);
+      console.log(`Published: ${post.publishedAt.toUTCString()}`);
+      console.log(`Description: ${post.description || 'N/A'}`);
+      console.log('---');
+    }
+  } catch (err) {
+    throw err;
+  }
+}
+
 // --- 5. Main Application Entry Point ---
 
 /**
@@ -503,6 +581,7 @@ async function main() { // <-- CHANGED
   registerCommand(registry, 'follow', middlewareLoggedIn(handlerFollow));
   registerCommand(registry, 'following', middlewareLoggedIn(handlerFollowing));
   registerCommand(registry, 'unfollow', middlewareLoggedIn(handlerUnfollow));
+  registerCommand(registry, 'browse', middlewareLoggedIn(handlerBrowse));
 
 
   const args = process.argv.slice(2);
